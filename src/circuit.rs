@@ -1,11 +1,10 @@
-use crate::split_base::CircuitBuilderSplit;
 use num::bigint::BigUint;
 use num::FromPrimitive;
+use plonky2::field::extension::Extendable;
 use plonky2::hash::hash_types::RichField;
 use plonky2::iop::target::BoolTarget;
 use plonky2::plonk::circuit_builder::CircuitBuilder;
 use plonky2_ecdsa::gadgets::biguint::{BigUintTarget, CircuitBuilderBiguint};
-use plonky2_field::extension::Extendable;
 use plonky2_u32::gadgets::arithmetic_u32::{CircuitBuilderU32, U32Target};
 
 #[rustfmt::skip]
@@ -47,9 +46,9 @@ pub struct Sha512Targets {
 pub fn array_to_bits(bytes: &[u8]) -> Vec<bool> {
     let len = bytes.len();
     let mut ret = Vec::new();
-    for i in 0..len {
+    for byte in bytes.iter().take(len) {
         for j in 0..8 {
-            let b = (bytes[i] >> (7 - j)) & 1;
+            let b = (*byte >> (7 - j)) & 1;
             ret.push(b == 1);
         }
     }
@@ -87,7 +86,7 @@ pub fn bits_to_biguint_target<F: RichField + Extendable<D>, const D: usize>(
     BigUintTarget { limbs: u32_targets }
 }
 
-// define ROTATE(x, y)  (((x)>>(y)) | ((x)<<(64-(y))))
+/// define ROTATE(x, y)  (((x)>>(y)) | ((x)<<(64-(y))))
 fn rotate64(y: usize) -> Vec<usize> {
     let mut res = Vec::new();
     for i in 64 - y..64 {
@@ -99,8 +98,8 @@ fn rotate64(y: usize) -> Vec<usize> {
     res
 }
 
-// x>>y
-// Assume: 0 at index 64
+/// x>>y
+/// Assume: 0 at index 64
 fn shift64(y: usize) -> Vec<usize> {
     let mut res = Vec::new();
     for _ in 64 - y..64 {
@@ -112,12 +111,10 @@ fn shift64(y: usize) -> Vec<usize> {
     res
 }
 
-/*
-a ^ b ^ c = a+b+c - 2*a*b - 2*a*c - 2*b*c + 4*a*b*c
-          = a*( 1 - 2*b - 2*c + 4*b*c ) + b + c - 2*b*c
-          = a*( 1 - 2*b -2*c + 4*m ) + b + c - 2*m
-where m = b*c
- */
+///a ^ b ^ c = a+b+c - 2*a*b - 2*a*c - 2*b*c + 4*a*b*c
+///          = a*( 1 - 2*b - 2*c + 4*b*c ) + b + c - 2*b*c
+///         = a*( 1 - 2*b -2*c + 4*m ) + b + c - 2*m
+/// where m = b*c
 fn xor3<F: RichField + Extendable<D>, const D: usize>(
     builder: &mut CircuitBuilder<F, D>,
     a: BoolTarget,
@@ -140,7 +137,7 @@ fn xor3<F: RichField + Extendable<D>, const D: usize>(
     BoolTarget::new_unsafe(builder.sub(res, two_m))
 }
 
-//define Sigma0(x)    (ROTATE((x),28) ^ ROTATE((x),34) ^ ROTATE((x),39))
+///define Sigma0(x)    (ROTATE((x),28) ^ ROTATE((x),34) ^ ROTATE((x),39))
 fn big_sigma0<F: RichField + Extendable<D>, const D: usize>(
     builder: &mut CircuitBuilder<F, D>,
     a: &BigUintTarget,
@@ -161,7 +158,7 @@ fn big_sigma0<F: RichField + Extendable<D>, const D: usize>(
     bits_to_biguint_target(builder, res_bits)
 }
 
-//define Sigma1(x)    (ROTATE((x),14) ^ ROTATE((x),18) ^ ROTATE((x),41))
+///define Sigma1(x)    (ROTATE((x),14) ^ ROTATE((x),18) ^ ROTATE((x),41))
 fn big_sigma1<F: RichField + Extendable<D>, const D: usize>(
     builder: &mut CircuitBuilder<F, D>,
     a: &BigUintTarget,
@@ -182,7 +179,7 @@ fn big_sigma1<F: RichField + Extendable<D>, const D: usize>(
     bits_to_biguint_target(builder, res_bits)
 }
 
-//define sigma0(x)    (ROTATE((x), 1) ^ ROTATE((x), 8) ^ ((x)>> 7))
+///define sigma0(x)    (ROTATE((x), 1) ^ ROTATE((x), 8) ^ ((x)>> 7))
 fn sigma0<F: RichField + Extendable<D>, const D: usize>(
     builder: &mut CircuitBuilder<F, D>,
     a: &BigUintTarget,
@@ -204,7 +201,7 @@ fn sigma0<F: RichField + Extendable<D>, const D: usize>(
     bits_to_biguint_target(builder, res_bits)
 }
 
-//define sigma1(x)    (ROTATE((x),19) ^ ROTATE((x),61) ^ ((x)>> 6))
+///define sigma1(x)    (ROTATE((x),19) ^ ROTATE((x),61) ^ ((x)>> 6))
 fn sigma1<F: RichField + Extendable<D>, const D: usize>(
     builder: &mut CircuitBuilder<F, D>,
     a: &BigUintTarget,
@@ -226,10 +223,9 @@ fn sigma1<F: RichField + Extendable<D>, const D: usize>(
     bits_to_biguint_target(builder, res_bits)
 }
 
-/*
-ch = a&b ^ (!a)&c
-   = a*(b-c) + c
- */
+///ch = a&b ^ (!a)&c
+///  = a*(b-c) + c
+///
 fn ch<F: RichField + Extendable<D>, const D: usize>(
     builder: &mut CircuitBuilder<F, D>,
     a: &BigUintTarget,
@@ -249,13 +245,11 @@ fn ch<F: RichField + Extendable<D>, const D: usize>(
     bits_to_biguint_target(builder, res_bits)
 }
 
-/*
-maj = a&b ^ a&c ^ b&c
-    = a*b   +  a*c  +  b*c  -  2*a*b*c
-    = a*( b + c - 2*b*c ) + b*c
-    = a*( b + c - 2*m ) + m
-where m = b*c
- */
+///maj = a&b ^ a&c ^ b&c
+///    = a*b   +  a*c  +  b*c  -  2*a*b*c
+///    = a*( b + c - 2*b*c ) + b*c
+///    = a*( b + c - 2*m ) + m
+///where m = b*c
 fn maj<F: RichField + Extendable<D>, const D: usize>(
     builder: &mut CircuitBuilder<F, D>,
     a: &BigUintTarget,
@@ -308,10 +302,10 @@ fn add_biguint_2limbs<F: RichField + Extendable<D>, const D: usize>(
     }
 }
 
-// padded_msg_len = block_count x 1024 bits
-// Size: msg_len_in_bits (L) |  p bits   | 128 bits
-// Bits:      msg            | 100...000 |    L
-pub fn make_circuits<F: RichField + Extendable<D>, const D: usize>(
+/// padded_msg_len = block_count x 1024 bits
+/// Size: msg_len_in_bits (L) |  p bits   | 128 bits
+/// Bits:      msg            | 100...000 |    L
+pub fn sha512_circuit<F: RichField + Extendable<D>, const D: usize>(
     builder: &mut CircuitBuilder<F, D>,
     msg_len_in_bits: u128,
 ) -> Sha512Targets {
@@ -330,19 +324,19 @@ pub fn make_circuits<F: RichField + Extendable<D>, const D: usize>(
         message.push(builder.constant_bool(false));
     }
     for i in 0..128 {
-        let b = ((msg_len_in_bits as u128) >> (127 - i)) & 1;
+        let b = (msg_len_in_bits >> (127 - i)) & 1;
         message.push(builder.constant_bool(b == 1));
     }
 
     // init states
     let mut state = Vec::new();
-    for i in 0..8 {
-        state.push(builder.constant_biguint(&BigUint::from_u64(H512_512[i]).unwrap()));
+    for item in &H512_512 {
+        state.push(builder.constant_biguint(&BigUint::from_u64(*item).unwrap()));
     }
 
     let mut k512 = Vec::new();
-    for i in 0..80 {
-        k512.push(builder.constant_biguint(&BigUint::from_u64(K64[i]).unwrap()));
+    for item in &K64 {
+        k512.push(builder.constant_biguint(&BigUint::from_u64(*item).unwrap()));
     }
 
     for blk in 0..block_count {
@@ -361,9 +355,7 @@ pub fn make_circuits<F: RichField + Extendable<D>, const D: usize>(
             let u32_0 = builder.le_sum(message[index..index + 32].iter().rev());
             let u32_1 = builder.le_sum(message[index + 32..index + 64].iter().rev());
 
-            let mut u32_targets = Vec::new();
-            u32_targets.push(U32Target(u32_1));
-            u32_targets.push(U32Target(u32_0));
+            let u32_targets = vec![U32Target(u32_1), U32Target(u32_0)];
             let big_int = BigUintTarget { limbs: u32_targets };
 
             x.push(big_int);
@@ -430,9 +422,9 @@ pub fn make_circuits<F: RichField + Extendable<D>, const D: usize>(
         state[7] = add_biguint_2limbs(builder, &state[7], &h);
     }
 
-    for i in 0..8 {
+    for state_item in state.iter().take(8) {
         for j in (0..2).rev() {
-            let bit_targets = builder.split_le_base::<2>(state[i].get_limb(j).0, 32);
+            let bit_targets = builder.split_le_base::<2>(state_item.get_limb(j).0, 32);
             for k in (0..32).rev() {
                 digest.push(BoolTarget::new_unsafe(bit_targets[k]));
             }
@@ -444,57 +436,45 @@ pub fn make_circuits<F: RichField + Extendable<D>, const D: usize>(
 
 #[cfg(test)]
 mod tests {
-    use crate::circuit::{array_to_bits, make_circuits};
+    use crate::circuit::{array_to_bits, sha512_circuit};
     use anyhow::Result;
     use plonky2::iop::witness::{PartialWitness, WitnessWrite};
     use plonky2::plonk::circuit_builder::CircuitBuilder;
     use plonky2::plonk::circuit_data::CircuitConfig;
     use plonky2::plonk::config::{GenericConfig, PoseidonGoldilocksConfig};
-    use rand::Rng;
-
-    const EXPECTED_RES: [u8; 512] = [
-        0, 1, 1, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 1, 0, 0, 0, 1,
-        0, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 0, 1, 0, 1, 1, 0, 0, 0, 1, 1, 0, 0, 0,
-        1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 1, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1,
-        0, 1, 0, 1, 1, 1, 0, 1, 1, 0, 0, 1, 1, 1, 0, 0, 0, 0, 1, 1, 0, 1, 1, 1, 0, 0, 1, 0, 1, 1,
-        1, 0, 1, 1, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1,
-        0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 1, 1, 1, 0, 1, 0, 1, 1, 0, 0, 1, 0, 0, 1, 0, 0,
-        1, 1, 0, 1, 1, 1, 1, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 1, 1, 0, 1, 1, 1, 0, 0, 1, 0, 0, 1,
-        1, 1, 1, 1, 0, 0, 1, 1, 1, 0, 1, 1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1, 1, 1, 1, 0, 0,
-        1, 1, 0, 0, 1, 1, 0, 0, 0, 0, 1, 0, 1, 0, 1, 1, 0, 0, 1, 0, 1, 0, 0, 0, 1, 1, 0, 1, 0, 1,
-        1, 0, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 1, 1,
-        1, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 1, 0, 0, 1, 1, 1, 0, 1, 0, 1, 0, 0, 1, 1, 0,
-        1, 0, 0, 1, 0, 0, 1, 0, 1, 0, 1, 1, 1, 1, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1,
-        1, 1, 0, 1, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 1, 1, 0, 0, 0, 0, 1, 0,
-        1, 0, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1,
-        0, 0, 1, 1, 1, 0, 1, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 1, 0, 0, 1, 1, 1,
-        0, 1, 0, 0, 0, 0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 1, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1,
-        0, 1, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 1, 1, 1, 0,
-        0, 1,
-    ];
+    use rand::random;
+    use sha2::Sha512;
+    use sha2::Digest;
 
     #[test]
     fn test_sha512() -> Result<()> {
-        let mut msg = vec![0; 128 as usize];
-        for i in 0..127 {
-            msg[i] = i as u8;
-        }
+        const MSG_SIZE: usize = 128;
+
+        let msg: Vec<u8> = (0..MSG_SIZE).map(|_| random::<u8>() as u8).collect();
+        
+        let mut hasher = Sha512::new();
+        hasher.update(msg.clone());
+        let hash = hasher.finalize();
 
         let msg_bits = array_to_bits(&msg);
         let len = msg.len() * 8;
+
+	let hash_bits = array_to_bits(&hash);
+        
         const D: usize = 2;
         type C = PoseidonGoldilocksConfig;
         type F = <C as GenericConfig<D>>::F;
-        let mut builder = CircuitBuilder::<F, D>::new(CircuitConfig::standard_recursion_config());
-        let targets = make_circuits(&mut builder, len as u128);
+        
+	let mut builder = CircuitBuilder::<F, D>::new(CircuitConfig::standard_recursion_config());
+        let targets = sha512_circuit(&mut builder, len as u128);
         let mut pw = PartialWitness::new();
 
         for i in 0..len {
             pw.set_bool_target(targets.message[i], msg_bits[i]);
         }
 
-        for i in 0..EXPECTED_RES.len() {
-            if EXPECTED_RES[i] == 1 {
+        for i in 0..hash_bits.len() {
+            if hash_bits[i] {
                 builder.assert_one(targets.digest[i].target);
             } else {
                 builder.assert_zero(targets.digest[i].target);
@@ -510,29 +490,34 @@ mod tests {
     #[test]
     #[should_panic]
     fn test_sha512_failure() {
-        let mut msg = vec![0; 128 as usize];
-        for i in 0..127 {
-            msg[i] = i as u8;
-        }
+	const MSG_SIZE: usize = 128;
+
+        let msg: Vec<u8> = (0..MSG_SIZE).map(|_| random::<u8>() as u8).collect();
+        let msg1: Vec<u8> = (0..MSG_SIZE).map(|_| random::<u8>() as u8).collect();
+
+        let mut hasher = Sha512::new();
+        hasher.update(msg1.clone());
+        let hash = hasher.finalize();
 
         let msg_bits = array_to_bits(&msg);
         let len = msg.len() * 8;
+
+        let hash_bits = array_to_bits(&hash);
+
         const D: usize = 2;
         type C = PoseidonGoldilocksConfig;
         type F = <C as GenericConfig<D>>::F;
+
         let mut builder = CircuitBuilder::<F, D>::new(CircuitConfig::standard_recursion_config());
-        let targets = make_circuits(&mut builder, len as u128);
+        let targets = sha512_circuit(&mut builder, len as u128);
         let mut pw = PartialWitness::new();
 
         for i in 0..len {
             pw.set_bool_target(targets.message[i], msg_bits[i]);
         }
 
-        let mut rng = rand::thread_rng();
-        let rnd = rng.gen_range(0..512);
-        for i in 0..EXPECTED_RES.len() {
-            let b = (i == rnd && EXPECTED_RES[i] != 1) || (i != rnd && EXPECTED_RES[i] == 1);
-            if b {
+        for i in 0..hash_bits.len() {
+            if hash_bits[i] {
                 builder.assert_one(targets.digest[i].target);
             } else {
                 builder.assert_zero(targets.digest[i].target);
